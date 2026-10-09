@@ -6,7 +6,7 @@ do_test.postprocess_per_image exactly. Frames are read straight from the subset 
 
 Outputs (eval_depth.py layout):
     <out-dir>/pred/<subset>/<frame_key>.npy      float32 depth, metres, 640x640
-    <out-dir>/normals/<subset>/<frame_key>.npy   float16 normals, [3, 640, 640]
+    <out-dir>/normals/<subset>/<frame_key>.npy   float16 normals, [3, 640, 640] (unless --no-normals)
     <out-dir>/timing.tsv                         per-frame timing (seconds)
 
     python tartanair_eval/infer_tartanair.py --subsets test_scene --limit 10 --out-dir <dir>
@@ -121,6 +121,7 @@ def main():
     ap.add_argument('--out-dir', required=True, help='writes pred/, normals/ and timing.tsv here')
     ap.add_argument('--limit', type=int, default=None, help='only the first N selected frames')
     ap.add_argument('--skip-existing', action='store_true', help='skip frames whose depth .npy already exists')
+    ap.add_argument('--no-normals', action='store_true', help='do not save normals (depth only)')
     ap.add_argument('--data-root', default=DATA_ROOT)
     ap.add_argument('--config', default=DEFAULT_CONFIG)
     ap.add_argument('--weights', default=DEFAULT_WEIGHTS)
@@ -159,12 +160,14 @@ def main():
             t_b = time.time()
             depth, normal = predict(model, cfg, rgb, intrinsic)
             depth = depth.float().cpu().numpy()
-            normal = normal.cpu().numpy().astype(np.float16)
+            if not a.no_normals:
+                normal = normal.cpu().numpy().astype(np.float16)
             t_c = time.time()
             os.makedirs(osp.dirname(depth_path), exist_ok=True)
-            os.makedirs(osp.dirname(normal_path), exist_ok=True)
             np.save(depth_path, depth.astype(np.float32))
-            np.save(normal_path, normal)
+            if not a.no_normals:
+                os.makedirs(osp.dirname(normal_path), exist_ok=True)
+                np.save(normal_path, normal)
             t_d = time.time()
             tlog.write(f'{subset}\t{key}\t{t_b - t_a:.4f}\t{t_c - t_b:.4f}\t{t_d - t_c:.4f}\t{t_d - t_a:.4f}\n')
             tlog.flush()
