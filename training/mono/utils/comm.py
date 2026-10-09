@@ -11,7 +11,10 @@ try:
 except:
     from mmengine import get_git_hash
 #import mono.mmseg as mmseg
-import mmseg
+try:
+    import mmseg  # only used for version logging in collect_env()
+except ImportError:
+    mmseg = None
 import time
 import datetime
 import logging
@@ -56,7 +59,8 @@ def _is_free_port(port):
 def collect_env():
     """Collect the information of the running environments."""
     env_info = collect_base_env()
-    env_info['MMSegmentation'] = f'{mmseg.__version__}+{get_git_hash()[:7]}'
+    if mmseg is not None:
+        env_info['MMSegmentation'] = f'{mmseg.__version__}+{get_git_hash()[:7]}'
 
     return env_info
 
