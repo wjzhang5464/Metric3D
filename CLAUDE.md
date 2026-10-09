@@ -35,16 +35,17 @@ Metric3D v1/v2: zero-shot monocular metric depth and surface-normal estimation. 
 
 Checked 2026-10-09 on `gilbreth-k046` (NVIDIA A100 80GB PCIe, driver 595.91.07):
 
-- Python 3.10.20, torch 2.1.0+cu121 (CUDA 12.1, cuDNN 8.9.2), `torch.cuda.is_available()` True, torchvision 0.16.0, xformers 0.0.22.post7 (memory-efficient attention works on GPU), mmcv 2.2.0 (compiled ops OK), mmengine 0.10.7, numpy 1.23.1, timm 0.9.12, opencv-python 4.8.0.74, h5py 3.16.0.
+- Python 3.10.20, torch 2.1.0+cu121 (CUDA 12.1, cuDNN 8.9.2), `torch.cuda.is_available()` True, torchvision 0.16.0, xformers 0.0.22.post7 (memory-efficient attention works on GPU), mmcv 2.2.0 (compiled ops OK), mmengine 0.10.7, numpy 1.23.1, timm 0.9.12, opencv-python 4.8.0.74, h5py 3.16.0, setuptools 80.10.2.
 - vs `requirements_v2.txt`: torch/torchvision/xformers are newer than pinned (2.0.1/0.15.2/0.0.21) but mutually consistent; everything else present.
 - mmcv 2.x has no `mmcv.utils.Config`; code falls back via `try/except` to `mmengine.Config`. Keep that pattern when adding imports.
-- `pkg_resources` is missing (removed in setuptools 82): `imagecorruptions` and `torch.utils.cpp_extension` fail to import. See the `train.py` blocker below.
+- **setuptools pinned `<81` (2026-10-09, user-approved; 82.0.1 → 80.10.2):** setuptools 82 removed `pkg_resources`, which torch 2.1's `torch.utils.cpp_extension` imports. That broke `train.py:149` (`collect_env()` → mmcv/mmengine `collect_env` → `cpp_extension`) and `imagecorruptions`. Do not upgrade setuptools past 80.x. No other package changed (`pip freeze` identical before/after). The harmless `pkg_resources is deprecated` warning on import is expected.
+- `CUDA_HOME` resolves to the Gilbreth system CUDA 12.6 module while torch/mmcv are built for CUDA 12.1; only matters if compiling CUDA extensions.
+- `pip check` reports pre-existing missing optional deps (not installed, not needed so far): `timm` → `huggingface-hub`, `safetensors`; `selective-scan` (not used by this repo) → `einops`, `ninja`.
 - **Inference:** all `mono/` modules and `hubconf.py` import. v2-S forward pass on random 1×3×616×1064 input: checkpoint loads with 0 unexpected keys and only `depth_model.encoder.mask_token` missing (expected; unused at inference); depth/confidence/normal outputs finite; ~46 ms per pass after warm-up, 0.76 GB peak GPU memory.
-- **Training:** `mmseg` is not installed (deliberately; likely conflicts with mmcv 2.2.0). Its import in `training/mono/utils/comm.py` is now optional (commit `ef84f91`; only used for version logging). With no stubs, all 81 `training/mono/{model,utils,datasets}` modules and `mono/tools/train.py` import in this env (h5py satisfies `hypersim_dataset.py`).
+- **Training:** `mmseg` is not installed (deliberately; likely conflicts with mmcv 2.2.0). Its import in `training/mono/utils/comm.py` is now optional (commit `ef84f91`; only used for version logging). With no stubs, all 81 `training/mono/{model,utils,datasets}` modules and `mono/tools/train.py` import in this env (h5py satisfies `hypersim_dataset.py`), and `training/mono/utils/comm.py: collect_env()` runs (after the setuptools pin). Not yet tested: an actual training step.
 
 ## Pending decisions and known issues
 
-- **Blocker for `train.py` (awaiting user decision):** `train.py:149` calls `collect_env()` → mmcv/mmengine `collect_env` → `torch.utils.cpp_extension`, which in torch 2.1 does `from pkg_resources import packaging`. setuptools 82.0.1 no longer ships `pkg_resources`, so training crashes there with `ModuleNotFoundError`. Options: pin `setuptools<81` in the env (needs user approval), or catch the failure around the env-info logging in code. Same root cause breaks `imagecorruptions` and anything else touching `torch.utils.cpp_extension`.
 - **Upstream bug:** `training/mono/tools/test.py:29` imports `do_test_check_data` from `mono.utils.do_test`, which is not defined anywhere (its only use, line 157, is commented out). `test.py` will fail with ImportError until that name is dropped from the import. Not fixed yet.
 - `training/mono/utils/raindropper/*` cannot be imported as standalone modules (uses `from raindropper...` absolute imports); its consumer `weather_aug_utils.py` imports fine. Repo quirk, not an env problem.
 
