@@ -102,6 +102,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--keys-file', required=True)
     ap.add_argument('--run-dir', required=True, help='holds pred/, normals/, timing.tsv (from infer_tartanair.py)')
+    ap.add_argument('--vis-dir', default=None, help='where figures and sheets go (default: <run-dir>/vis)')
     ap.add_argument('--data-root', default=DATA_ROOT)
     ap.add_argument('--config', default=DEFAULT_CONFIG)
     a = ap.parse_args()
@@ -112,7 +113,7 @@ def main():
         keys = [ln.rstrip('\n').split('\t') for ln in f if ln.strip()]
     with open(osp.join(a.run_dir, 'timing.tsv'), newline='') as f:
         timing = {r['frame_key']: r for r in csv.DictReader(f, delimiter='\t')}
-    vis_dir = osp.join(a.run_dir, 'vis')
+    vis_dir = a.vis_dir or osp.join(a.run_dir, 'vis')
 
     frames, zips = [], {}
     for subset, key in keys:
