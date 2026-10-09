@@ -77,6 +77,22 @@ Minimal programmatic use is in `hubconf.py` (`metric3d_vit_small(pretrain=True)`
 
 ONNX: `python onnx/metric3d_onnx_export.py metric3d_vit_small` then `python onnx/test_onnx.py metric3d_vit_small.onnx` (README's `metric_3d_onnx_export.py` name is a typo).
 
+TartanAir v2 zero-shot eval (`tartanair_eval/`, repo-root `mono/` only; on a compute node; `F=$RCAC_SCRATCH/metric3d/outputs/zeroshot_v2s/full`):
+```bash
+# full inference, detached + resumable (~17 min for 10,868 frames on an A100)
+setsid nohup python -B tartanair_eval/infer_tartanair.py --out-dir $F --skip-existing --no-normals > $F/logs/infer.log 2>&1 < /dev/null &
+# PRIMARY metrics: official eval_depth.py, unmodified (-B: never write __pycache__ under /depot)
+python -B /depot/chan129/data/TartanAir_v2/tartanair_v2_test/metrics/eval_depth.py \
+    --data /depot/chan129/data/TartanAir_v2/tartanair_v2_test --pred $F/pred --out $F/eval_official --per-frame
+# DIAGNOSTIC metrics (mask also GT <= cap) + pooled "all frames (ours)" rows for both
+python -B tartanair_eval/eval_capped.py --pred $F/pred --out $F/eval_capped --official-dir $F/eval_official
+# visuals: 4 seeded frames/subset from distinct envs, re-run with normals, 5-panel figures + sheets
+python -B tartanair_eval/select_keys.py --per-subset 4 --seed 0 --out $F/vis_frames_keys.txt
+python -B tartanair_eval/infer_tartanair.py --keys-file $F/vis_frames_keys.txt --out-dir $F/vis_frames
+python -B tartanair_eval/score_pilot.py --keys-file $F/vis_frames_keys.txt --run-dir $F/vis_frames --vis-dir $F/vis
+```
+`check_equivalence.py` diffs the wrapper against the official pipeline on a demo json (Stage 1 result: exactly 0). The model's max metric depth on TartanAir (f=320, 640x640) is 61.6 m (canonical clamp 200 / label scale factor 3.2468).
+
 Training (from `training/`; upstream shell scripts in `training/mono/scripts/train_scripts/` `cd ../../../` so must be run from inside that dir, and the README wrongly calls it `training_scripts`). Long runs go through sbatch scripts in `slurm/`:
 ```bash
 python mono/tools/train.py mono/configs/RAFTDecoder/vit.raft5.small.sanity_check.py \
