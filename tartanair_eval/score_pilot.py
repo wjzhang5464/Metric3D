@@ -103,6 +103,7 @@ def main():
     ap.add_argument('--keys-file', required=True)
     ap.add_argument('--run-dir', required=True, help='holds pred/, normals/, timing.tsv (from infer_tartanair.py)')
     ap.add_argument('--vis-dir', default=None, help='where figures and sheets go (default: <run-dir>/vis)')
+    ap.add_argument('--sheet-prefix', default='sheet_', help='contact sheets are <vis-dir>/<prefix><subset>.png and <prefix>all.png')
     ap.add_argument('--data-root', default=DATA_ROOT)
     ap.add_argument('--config', default=DEFAULT_CONFIG)
     a = ap.parse_args()
@@ -167,9 +168,9 @@ def main():
     sheets = {}
     for s in per_subset:
         ps = [f['vis'] for f in scored if f['subset'] == s]
-        sheets[s] = osp.join(vis_dir, f'sheet_{s}.png')
+        sheets[s] = osp.join(vis_dir, f'{a.sheet_prefix}{s}.png')
         contact_sheet(ps, sheets[s], cols=1, thumb_w=2000)
-    sheets['all'] = osp.join(vis_dir, 'sheet_all.png')
+    sheets['all'] = osp.join(vis_dir, f'{a.sheet_prefix}all.png')
     contact_sheet([f['vis'] for f in scored], sheets['all'], cols=3, thumb_w=1000)
 
     # timing: first frame includes CUDA warm-up, so exclude it from the steady-state rate
