@@ -211,6 +211,23 @@ Training went through the official `train.py`.
   of the two has to be named as "the" Metric3Dv2 baseline, the choice is also made by validation MAE.
 - We keep a record of the per-epoch validation MAE for both runs.
 
+**Implementation: `tartanair_finetune/select_checkpoint.py`.**
+- For each epoch checkpoint (`ckpt/stepXXXXXXXX.pth` with step = epoch x 4,361), it first checks that
+  the checkpoint keys match the inference-tree model exactly. It then runs every validation frame through
+  the delivery path of `tartanair_eval/infer_tartanair.py`: `build_model`, `read_rgb` and `predict_raw`,
+  i.e. GT intrinsics, no alignment, depth before the zeroing, cast to float32 as when saved.
+- Each frame is scored in-process with the official `eval_depth.py` functions `read_gt` and
+  `frame_metrics`, imported from the test package; the frame list comes from the trainval `frames.tsv`.
+  Scoring in-process avoids writing about 3 GB of validation predictions per checkpoint. The float32
+  values are exactly those a saved `.npy` would hold.
+- The score is the mean over frames (`aggregate`), as in `eval_depth.py`. The lowest MAE wins; on a tie,
+  the earlier epoch.
+- It is resumable and skips epochs already scored, so it can run while training continues.
+  `--reference` additionally scores the official weights under the run's inference config, i.e. the run
+  at step 0, for reference only.
+- Outputs go to `<run-dir>/val_selection/`: `epXX.jsonl` (per frame), `summary.tsv` and
+  `selection.json` (best epoch, checkpoint path and sha256, all per-epoch MAEs).
+
 ## 7. Test-time output (delivery)
 
 Three prediction sets, each with one file per test frame (10,868), produced by the same inference script:
@@ -226,6 +243,21 @@ Format (test package README, "Metric script"): `<pred_dir>/<subset>/<frame_key>.
 zeroing. GT intrinsics come from `frames.tsv`; no scale alignment. The collaborator computes all metrics.
 We may also run the official `eval_depth.py` ourselves as a format check (it reports failures for
 missing, non-640x640 or non-positive predictions).
+
+**Implementation.** `tartanair_eval/infer_tartanair.py` (2026-10-14 version) saves the output of
+`predict_raw()`, the official post-processing without its final zeroing. `predict()` still returns the
+exact official output; `check_equivalence.py` and the FoV experiment use it. Per frame, `timing.tsv`
+records `zeroing_px`, the number of pixels the official zeroing would have changed (expected 0).
+Commands (on a compute node; `--no-normals` because only depth is delivered):
+
+    # zero-shot (official weights and config)
+    python -B tartanair_eval/infer_tartanair.py --no-normals --out-dir $RCAC_SCRATCH/metric3d/outputs/zeroshot_v2s/final
+    # fine-tuned run (a) / (b): best checkpoint from val_selection/selection.json
+    python -B tartanair_eval/infer_tartanair.py --no-normals --weights <best ckpt> \
+        --config mono/configs/HourglassDecoder/vit.raft5.small.dn700.py \
+        --out-dir $RCAC_SCRATCH/metric3d/outputs/finetune_v2s/ft_v2s_ta2_dn700/test
+    python -B tartanair_eval/infer_tartanair.py --no-normals --weights <best ckpt> \
+        --out-dir $RCAC_SCRATCH/metric3d/outputs/finetune_v2s/ft_v2s_ta2_dn200/test
 
 ### Zero-shot: conformance of the existing run and the required rerun
 
@@ -243,7 +275,8 @@ Checked 2026-10-14 against `$RCAC_SCRATCH/metric3d/outputs/zeroshot_v2s/full/pre
 **Tip for the rerun.** Once the inference script is final (saving before the zeroing, and able to load
 fine-tuned weights and configs), rerun zero-shot with that exact script into a new directory, e.g.
 `$RCAC_SCRATCH/metric3d/outputs/zeroshot_v2s/final/pred`. The rerun takes about 17 minutes on an A100.
-Then compare it to the old predictions: they should be bit-identical, which confirms fact 5. The
+Then compare it to the old predictions with `tartanair_finetune/compare_preds.py --a <old>/pred
+--b <new>/pred`: they should be bit-identical, which confirms fact 5. The
 **delivered** zero-shot set is the rerun, so all three sets come from the same script version. The old
 run and the zero-shot report remain valid as they are.
 
