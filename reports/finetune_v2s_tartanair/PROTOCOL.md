@@ -4,8 +4,9 @@ Archive of the rules, sources and decisions for the Metric3D v2-S fine-tuning ba
 supplementary material describes this baseline from this file. Every claim about the papers or the code
 cites its source, so it can be checked. Decisions are dated in the decision log (section 9).
 
-Status (2026-10-14): protocol agreed; data verified (section 8); configs written and smoke-tested
-(section 5b); run script ready (`tartanair_finetune/run_finetune.sh`). The full runs have not started yet.
+Status (2026-10-14): protocol agreed; data verified (section 8); configs smoke-tested (section 5b). Run (a)
+started 2026-10-14 15:40 on gilbreth-k025 (commit `67570ce`); run (b) is waiting for a GPU. The zero-shot
+delivery set is done and bit-identical to the original zero-shot run (section 7).
 
 ## 1. Scope
 
@@ -280,6 +281,12 @@ Then compare it to the old predictions with `tartanair_finetune/compare_preds.py
 **delivered** zero-shot set is the rerun, so all three sets come from the same script version. The old
 run and the zero-shot report remain valid as they are.
 
+**Done 2026-10-14.** The rerun used commit `a289afc` (`infer_tartanair.py` as of `05bc4d4`), with no
+uncommitted changes, on gilbreth-k025 alongside training. It produced 10,868 files in
+`$RCAC_SCRATCH/metric3d/outputs/zeroshot_v2s/final/pred` in 1,724 s. `zeroing_px` is 0 on every frame.
+`compare_preds.py` against `zeroshot_v2s/full/pred`: **10,868/10,868 bit-identical** (max abs difference
+0.0; `final/logs/compare_with_full.json`). This is the delivered zero-shot set.
+
 ## 8. Compute, storage and layout
 
 - Slurm account **`stanchan`**. Small tests (smoke tests, data checks) run on the user's interactive node (`srun --overlap` into its job); `standby` is the fallback. Long runs either go through
@@ -354,8 +361,9 @@ Scripts: `tartanair_finetune/check_trainval_data.py` (package content) and
 2. **Done 2026-10-14.** Configs: `training/mono/configs/RAFTDecoder/vit.raft5.small.tartanair.dn200.py`
    (run b) and `.dn700.py` (run a); inference config `mono/configs/HourglassDecoder/vit.raft5.small.dn700.py`.
 3. **Done 2026-10-14.** Smoke tests (section 5b) and the run script `tartanair_finetune/run_finetune.sh`.
-4. Inference script: save before the zeroing; support validation frames and fine-tuned weights/configs.
-   Then the zero-shot rerun and its bit-identity check.
+4. **Done 2026-10-14.** Inference script (saves before the zeroing, validation split), checkpoint
+   selection script (tested end to end on smoke checkpoints), and the zero-shot rerun with its bit-identity
+   check.
 5. Run (a): 20 epochs; validation MAE for every epoch; select; test predictions.
 6. Run (b): the same.
 7. Write-up for the supplementary material: hyperparameter table, deviations from the official
