@@ -4,7 +4,8 @@ Archive of the rules, sources and decisions for the Metric3D v2-S fine-tuning ba
 supplementary material describes this baseline from this file. Every claim about the papers or the code
 cites its source, so it can be checked. Decisions are dated in the decision log (section 9).
 
-Status (2026-10-14): protocol agreed; no fine-tuning code written or run yet.
+Status (2026-10-14): protocol agreed; data verified and training dataset class written (section 8);
+no training run yet.
 
 ## 1. Scope
 
@@ -97,11 +98,19 @@ fallback does not apply.
 | Losses | VNLoss 0.1, GRUSequenceLoss 1.0 (gamma 0.9, `stereo_sup=0`), DeNoConsistencyLoss 0.001 (`CEL`, scale 2) | official KITTI config |
 | Precision / clipping | bf16 autocast, gradient-norm clipping 2.5 (official training loop, `IterBasedRunner_AMP`) | official code |
 | Canonical space | focal_length 1000, labels scaled by 1000 / fx (CSTM_label) | official + rule 5 |
-| Crop and augmentation | official KITTI training pipeline, unchanged: BGR2RGB, LabelScaleCononical, RandomResize (prob 0.5, ratio 0.85-1.15), RandomCrop 616x1064 (random; pads with RGB 0 and label -1), RandomEdgeMask (0.2), RandomHorizontalFlip (0.4), PhotoMetricDistortion, Weather (0.05), RandomBlur (0.05), RGBCompresion (0.1), Normalize | official KITTI config |
+| Crop and augmentation | official KITTI training pipeline: BGR2RGB, LabelScaleCononical, RandomResize (prob 0.5, ratio 0.85-1.15, **`is_lidar=False`**, see below), RandomCrop 616x1064 (random; pads with RGB 0 and label -1), RandomEdgeMask (0.2), RandomHorizontalFlip (0.4), PhotoMetricDistortion, Weather (0.05), RandomBlur (0.05), RGBCompresion (0.1), Normalize | official KITTI config |
+| `clip_depth_range` | (0.1, 200), added to `data_basic`. The official KITTI config lacks it, although `BaseDataset.__init__` reads it, so the script as released fails with a KeyError. Used only in the test phase, so it does not affect training. | fix of an upstream bug |
+| Data loading | frames read straight from the package zips (no extraction); DataLoader worker count is an engineering setting chosen from the smoke-test throughput (not part of the recipe) | decision |
 | Invalid pixels | GT set invalid (-1) wherever the package's `valid_mask.png` is 0. Its definition is exactly `depth > 1e-3 & depth <= 200 & ~sky`, i.e. rule 5. No sky regression loss (the official KITTI config has none either). | rule 5 |
 | Dataset `data_type` | `denselidar_syn` (as for the official synthetic sets VKITTI / Hypersim / Replica). All three losses above are active for it. | decision |
 | Seed | `--seed 3047` (our method's seed). The sampler's hard-coded seeds (136 / 639, incremented per epoch) and the dataset's `random.seed(100)` stay unchanged. | decision |
 | Runs | (a) `depth_normalize=(0.1, 700)` first, then (b) `depth_normalize=(0.1, 200)`. Everything else identical. | rule 5 |
+
+**`is_lidar=False` (the one deviation from the KITTI pipeline).** The KITTI config resizes labels with
+`is_lidar=True`, a scatter resize meant for sparse LiDAR. On dense depth it leaves holes when upscaling. The
+data check (section 8) measured 17.7% of valid labels lost at r = 1.1, 24.7% at r = 1.15 and 0.4% when
+downscaling. The official v2 training config uses `is_lidar=False` (nearest-neighbour resize) for every
+dense dataset, including the synthetic ones (VKITTI, Hypersim, Replica), so we use it too.
 
 **Normals.** TartanAir has no GT normals. `NormalBranchLoss` is not in the recipe, and it would return
 zero anyway, because it masks on non-zero GT normals. `DeNoConsistencyLoss` needs no labels: it compares
@@ -123,9 +132,11 @@ script uses it.
    the official weights but does not reproduce the zero-shot predictions at step 0. This is inherent to
    rule 5. We record the step-0 validation MAE of both runs for reference.
 4. **Run (a) still clips the farthest GT under strong downscaling.** A 200 m label becomes
-   200 x 3.125 / r canonical, which exceeds 700 when r < 0.893. That happens in about 7% of samples
-   (prob 0.5 x (0.893 - 0.85) / 0.3), and then only for GT above about 190 m. We accept this and mention
-   it in the supplementary material.
+   200 x 3.125 / r canonical, which exceeds 700 when r < 0.893. That r occurs in about 7% of samples
+   (prob 0.5 x (0.893 - 0.85) / 0.3), but only frames with GT above about 190 m are affected. Measured
+   through the full pipeline (640 samples): 2.8% of samples and 0.001% of valid label pixels exceed 700.
+   For run (b), 2.1% of valid label pixels exceed 200. We accept this and mention it in the supplementary
+   material.
 5. **The `< 300` zeroing never fires for either run or for zero-shot.** The decoder's output range maps to
    [0.031, 61.6] m (b, zero-shot) or [0.031, 215.6] m (a). We still save before the zeroing, as rule 6
    requires.
@@ -190,7 +201,7 @@ run and the zero-shot report remain valid as they are.
 
 ## 8. Compute, storage and layout
 
-- Slurm account **`stanchan`**. Smoke tests use the `standby` queue. Long runs either go through
+- Slurm account **`stanchan`**. Small tests (smoke tests, data checks) run on the user's interactive node (`srun --overlap` into its job); `standby` is the fallback. Long runs either go through
   `sbatch`, or are started by hand on an interactive node (up to 7 days). If a run outlives its job, it
   continues with `--resume-from`.
 - **Never compute on the login node** (check `hostname`).
@@ -202,8 +213,34 @@ run and the zero-shot report remain valid as they are.
   - `outputs/finetune_v2s/<run>/val/epXX/pred/` (validation predictions per epoch) and
     `outputs/finetune_v2s/<run>/test/pred/` (delivered test predictions)
   - `outputs/zeroshot_v2s/final/pred/` (delivered zero-shot rerun)
-- Before first use, verify the sha256 of all 11 trainval zips against `tartanair_v2_trainval/README.md`
-  (on 2026-10-14 the zips were still being copied).
+- Checksums verified 2026-10-14: all 11 trainval zips and all 7 test zips match the sha256 values in the
+  two package READMEs.
+
+### Data verification (2026-10-14)
+
+Scripts: `tartanair_finetune/check_trainval_data.py` (package content) and
+`tartanair_finetune/check_train_pipeline.py` (dataset class + training pipeline). Results are in
+`$RCAC_SCRATCH/metric3d/outputs/data_checks/`.
+
+- **Package.** `frames.tsv` has 71,723 rows (69,779 train, 1,944 validation), and every frame has
+  fx = fy = cx = cy = 320. Each zip holds exactly its `frames.tsv` frames, each with its 4 members.
+  No frame key is shared with the test package. All 38 validation environments are training environments.
+- **Content** (3,000 seeded train frames and all validation frames): rgb is 640x640x3; depth is float16
+  and finite. `valid_mask` equals the README rule pixel for pixel, and the mask counts equal `frames.tsv`.
+  No frame lacks valid pixels. cv2 decodes the 1-bit masks as 0/255, so the loader tests `> 0`.
+- **Depth beyond the run-(b) cap.** Of the valid pixels, 2.0% are beyond the training-time cap of 64 m in
+  train frames, and 66% of training frames have at least one such pixel. In validation frames the share
+  is 1.1%. For comparison, 1.52% of test pixels lie beyond the 61.6 m test-time cap. The training split
+  is somewhat farther overall than validation and test.
+- **Pipeline, exact checks.** For 24 frames, with RandomResize off and at r = 0.85, 0.9, 1.1 and 1.15,
+  the dataset output was compared with labels computed independently from the zip members. Labels equal
+  GT x 3.125 / r within float32 precision. Validity, sky id 142, padding and the returned scale have zero
+  mismatches.
+- **Pipeline, random.** The label scale ranged over 2.72-3.67, with 52% of samples not resized. Output
+  shapes are 3x616x1064 and 1x616x1064. On average 49% of each 616x1064 crop carries valid labels,
+  because width padding covers about 40% of it (official behaviour).
+- **Throughput.** Per sample, one worker needs about 167 ms: 87 ms to read and decode from the zip, the
+  rest for augmentation. With 8 workers the pipeline delivers 20.6 frames/s.
 
 ## 9. Decision log
 
@@ -221,12 +258,16 @@ run and the zero-shot report remain valid as they are.
 | 2026-10-14 | Slurm account `stanchan`; `standby` for smoke tests; long runs by sbatch or on an interactive node | user |
 | 2026-10-14 | All outputs stay on scratch until all experiments are done; move to depot together later | user |
 | 2026-10-14 | Delivered zero-shot set = rerun with the final inference script (section 7) | user (accepted proposal) |
+| 2026-10-14 | RandomResize `is_lidar=False` (official setting for dense datasets) instead of the KITTI config's `True` | user (accepted proposal) |
+| 2026-10-14 | Add `clip_depth_range=(0.1, 200)` (missing from the official KITTI config; no effect on training) | user (accepted proposal) |
+| 2026-10-14 | Data-loading speed must not limit training: tune the worker count (engineering, not recipe) | user |
+| 2026-10-14 | Small tests run directly on the user's interactive node; final fine-tuning runs are started by the user by hand from scripts we provide, so progress is visible live | user |
 
 ## 10. Plan
 
-1. Data: verify the zip checksums; write the `TartanAirDataset` training class; build the annotations
-   from `frames.tsv`; check dataloader samples visually and numerically on train/validation frames
-   (label scale 3.125 / r, masks, padding).
+1. **Done 2026-10-14.** Data: verified the zip checksums; wrote the `TartanAirV2Dataset` training class,
+   which reads `frames.tsv` and the zips directly; checked dataloader samples visually and numerically
+   (section 8).
 2. Configs: the training config for ViT-S runs (a) and (b); the inference config for (a).
 3. Smoke test (standby): pretrained weights load with only `mask_token` missing; training- and
    inference-tree forward passes agree at step 0; a few hundred iterations with finite, decreasing losses;
