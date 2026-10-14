@@ -26,6 +26,7 @@ from .matterport3d_dataset import Matterport3DDataset
 from .virtualkitti_dataset import VKITTIDataset
 from .blendedmvg_omni_dataset import BlendedMVGOmniDataset
 from .hypersim_dataset import HypersimDataset
+from .tartanair_v2_dataset import TartanAirV2Dataset
 
 __all__ = ['BaseDataset', 'DDADDataset', 'MapillaryPSDDataset',
 'Argovers2Dataset', 'CityscapesDataset', 'DrivingStereoDataset', 'DSECDataset', 'LyftDataset', 'DIMLDataset', 'AnyDataset', 
@@ -35,4 +36,4 @@ __all__ = ['BaseDataset', 'DDADDataset', 'MapillaryPSDDataset',
 'G8V1Dataset', 'ETH3DDataset', 'WaymoDataset', 
 'IBIMSDataset',
 'ReplicaDataset', 'HM3DDataset', 'Matterport3DDataset', 'VKITTIDataset',
-'BlendedMVGOmniDataset']
+'BlendedMVGOmniDataset', 'TartanAirV2Dataset']
