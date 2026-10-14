@@ -49,6 +49,9 @@ class TartanAirV2Dataset(BaseDataset):
         if self._zips_pid != os.getpid():
             self._zips = {}
             self._zips_pid = os.getpid()
+            # One OpenCV thread per DataLoader worker: parallelism comes from the workers, and per-worker OpenCV
+            # thread pools oversubscribe the CPUs (measured: slower training steps). No effect on results.
+            cv2.setNumThreads(1)
         if name not in self._zips:
             self._zips[name] = zipfile.ZipFile(os.path.join(self.data_root, name))
         return self._zips[name]

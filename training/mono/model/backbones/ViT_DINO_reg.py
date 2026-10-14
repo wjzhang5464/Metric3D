@@ -895,8 +895,18 @@ def init_weights_vit_timm(module: nn.Module, name: str = ""):
 
 def load_ckpt_dino(checkpoint, model, reserve_norm=True):
     if checkpoint is not None:
-        with open(checkpoint, "rb") as f:
-            state_dict = torch.load(f)
+        # Ported from the inference tree (mono/model/backbones/ViT_DINO_reg.py): a missing ImageNet checkpoint is
+        # not an error when a full Metric3D checkpoint is loaded afterwards (--load-from). The model then has the
+        # same parameters as after a successful load (mask_token removed).
+        try:
+            with open(checkpoint, "rb") as f:
+                state_dict = torch.load(f)
+        except:
+            print('NO pretrained imagenet ckpt available! Check your path!')
+            del model.mask_token
+            if reserve_norm == False:
+                del model.norm
+            return
         try:
             model.load_state_dict(state_dict, strict=True)
         except:

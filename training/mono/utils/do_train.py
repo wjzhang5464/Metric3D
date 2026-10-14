@@ -374,7 +374,11 @@ def train_by_iters_amp(cfg, model, optimizer, lr_scheduler, train_dataloader, va
                         save_ckpt(cfg, model, optimizer, lr_scheduler, ((step+acc_batch)//acc_batch), epoch, loss_scaler=loss_scaler)
 
             step += 1
-            
+            # Stop after the final optimizer step (its checkpoint is saved above). Upstream kept looping past
+            # max_iters, where the poly schedule (1 - iter / max_iters) ** power turns complex and training crashes.
+            if step // acc_batch >= max_iters:
+                break
+
 
     except (RuntimeError, KeyboardInterrupt):
         stack_trace = traceback.format_exc()
