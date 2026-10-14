@@ -4,8 +4,8 @@ Archive of the rules, sources and decisions for the Metric3D v2-S fine-tuning ba
 supplementary material describes this baseline from this file. Every claim about the papers or the code
 cites its source, so it can be checked. Decisions are dated in the decision log (section 9).
 
-Status (2026-10-14): protocol agreed; data verified and training dataset class written (section 8);
-no training run yet.
+Status (2026-10-14): protocol agreed; data verified (section 8); configs written and smoke-tested
+(section 5b); run script ready (`tartanair_finetune/run_finetune.sh`). The full runs have not started yet.
 
 ## 1. Scope
 
@@ -92,7 +92,7 @@ fallback does not apply.
 | Trainable parameters | everything (encoder unfrozen) | official KITTI config |
 | Optimizer | AdamW; encoder lr 5e-7, decoder lr 1e-5; betas (0.9, 0.999); weight decay 0; eps 1e-10; `strict_match=True` (keeps the encoder/decoder parameter groups correct) | official KITTI config |
 | LR schedule | linear warmup 20 iterations (ratio 1e-6), then poly power 0.9 down to min_lr 1e-8, stretched over the full 20 epochs | official shape + rule 3 |
-| Batch | 16 images per optimizer step (official: 2 per GPU x 8 GPUs). Target: 1 A100 with batch 16; if it does not fit, gradient accumulation (`acc_batch`) keeps the effective batch at 16. Verified in the smoke test. | official + decision |
+| Batch | 16 images per optimizer step (official: 2 per GPU x 8 GPUs), on one A100 80GB with `batchsize_per_gpu=16`, `acc_batch=1` (peak 37 GB in the smoke test, so no accumulation needed). Single process, `--launcher None` (the model is wrapped in DataParallel on one GPU). | official + decision |
 | Length | 20 epochs over the train split only. 1 epoch = floor(69,779 / 16) = 4,361 iterations, so 87,220 iterations in total (the official 20,010 iterations are about 4.6 of our epochs). `drop_last` drops 3 random frames per epoch; the sampler reshuffles every epoch. | rule 3 |
 | Checkpoints | one per epoch (every 4,361 iterations), 20 per run | rule 3 |
 | Losses | VNLoss 0.1, GRUSequenceLoss 1.0 (gamma 0.9, `stereo_sup=0`), DeNoConsistencyLoss 0.001 (`CEL`, scale 2) | official KITTI config |
@@ -100,7 +100,7 @@ fallback does not apply.
 | Canonical space | focal_length 1000, labels scaled by 1000 / fx (CSTM_label) | official + rule 5 |
 | Crop and augmentation | official KITTI training pipeline: BGR2RGB, LabelScaleCononical, RandomResize (prob 0.5, ratio 0.85-1.15, **`is_lidar=False`**, see below), RandomCrop 616x1064 (random; pads with RGB 0 and label -1), RandomEdgeMask (0.2), RandomHorizontalFlip (0.4), PhotoMetricDistortion, Weather (0.05), RandomBlur (0.05), RGBCompresion (0.1), Normalize | official KITTI config |
 | `clip_depth_range` | (0.1, 200), added to `data_basic`. The official KITTI config lacks it, although `BaseDataset.__init__` reads it, so the script as released fails with a KeyError. Used only in the test phase, so it does not affect training. | fix of an upstream bug |
-| Data loading | frames read straight from the package zips (no extraction); DataLoader worker count is an engineering setting chosen from the smoke-test throughput (not part of the recipe) | decision |
+| Data loading | frames read straight from the package zips (no extraction); 16 DataLoader workers, one OpenCV thread per worker (engineering settings, not part of the recipe; the smoke test showed data loading is not the bottleneck) | decision |
 | Invalid pixels | GT set invalid (-1) wherever the package's `valid_mask.png` is 0. Its definition is exactly `depth > 1e-3 & depth <= 200 & ~sky`, i.e. rule 5. No sky regression loss (the official KITTI config has none either). | rule 5 |
 | Dataset `data_type` | `denselidar_syn` (as for the official synthetic sets VKITTI / Hypersim / Replica). All three losses above are active for it. | decision |
 | Seed | `--seed 3047` (our method's seed). The sampler's hard-coded seeds (136 / 639, incremented per epoch) and the dataset's `random.seed(100)` stay unchanged. | decision |
@@ -148,7 +148,55 @@ script uses it.
 8. **The training and inference trees (`training/mono/` vs. root `mono/`) have diverged.** Fine-tuned
    checkpoints are evaluated with the root `mono/` code. Before any evaluation we check that the checkpoint
    loads with no unexpected keys. We also check that, at step 0, the training-tree and inference-tree
-   forward passes agree.
+   forward passes agree (done, section 5b).
+9. **Resuming restarts the sampler's data order.** `--resume-from` restores the weights, the optimizer and
+   the LR schedule. The sampler's hard-coded seeds start again from their initial values, so the epochs
+   after a resume repeat the shuffling order of epochs 1, 2, ... (the augmentations still differ).
+   Checkpoints fall on epoch boundaries, so epochs stay aligned with checkpoints. This only matters if a
+   run is interrupted; any resume is recorded in `run_history.txt`.
+10. **The first iteration uses the base LR.** The official schedule applies warmup from iteration 2
+    onwards. This is official behaviour and not changed.
+
+### 5a. Changes to the official training code and config
+
+None of these changes what is trained. Each one makes the official code run in our setting, or removes a
+crash.
+
+| Change | Why it does not change training |
+|---|---|
+| `clip_depth_range=(0.1, 200)` added to `data_basic` | The KITTI config lacks it, but `BaseDataset.__init__` reads it (KeyError). It is used only in the test phase. |
+| `_base_/default_runtime.py` added to the config bases | The KITTI config lacks it, but `train.py` needs `dist_params` etc. (AttributeError). All values we set explicitly override it; the full v2 training config `vit.raft5.small.py` includes it too. |
+| `evaluation.multi_dataset_eval=False` | With `True`, `do_train` builds the validation loader with a `DistributedSampler`, which fails without a process group (`--launcher None`). The validation loader is never used (`online_eval=False`). |
+| `do_train.train_by_iters_amp`: stop after the final iteration | Upstream loops forever. After `max_iters` the poly schedule computes `(1 - iter / max_iters) ** 0.9` of a negative number, the LR becomes complex, and training crashes. Everything up to and including the checkpoint at `max_iters` is unchanged. |
+| `training/.../ViT_DINO_reg.load_ckpt_dino`: a missing ImageNet DINOv2 file is skipped (ported from the inference tree) | The ImageNet weights are fully overwritten by `--load-from`. The resulting model has the same parameters as after a successful ImageNet load (`mask_token` removed), i.e. exactly the 361 keys of the released checkpoint. |
+| `TartanAirV2Dataset`: `cv2.setNumThreads(1)` in each worker | Thread count only. |
+
+### 5b. Smoke tests (2026-10-14, on the user's interactive A100 node; validation frames only)
+
+Results are in `$RCAC_SCRATCH/metric3d/outputs/smoke/`. Script: `tartanair_finetune/step0_equivalence.py`.
+Training went through the official `train.py`.
+
+- **Keys.** The released checkpoint has 361 keys. It loads into the inference tree with no missing or
+  unexpected key. Into the training tree it loads with only `mask_token` missing; that was before the
+  `load_ckpt_dino` port, which makes the two trees identical. A fine-tuned checkpoint (run (a), 40
+  iterations) loads into the inference tree with 361/361 keys.
+- **Step 0, run (b) config.** On 8 validation frames, the training-tree and inference-tree predictions
+  are **bit-identical** (max abs difference 0.0 in canonical depth).
+- **Step 0, run (a) config.** The training tree with `depth_normalize=(0.1, 700)` differs from the
+  official predictions by up to 675 canonical units, with a median relative difference of up to 2.06 per
+  frame. This is expected (fact 3). With the `dn700` inference config, the inference tree outputs
+  canonical depth up to 700, as intended.
+- **Training.** Losses are finite for both configs (batch 2 and 16; 20-80 iterations). Checkpoints are
+  written at the configured interval, and the process exits cleanly at `max_iters`. Resume continues from
+  the saved iteration.
+- **Speed and memory at batch 16.** Peak GPU memory is 37 GB (nvidia-smi; 33.9 GB allocated by torch).
+  An iteration takes **1.2 s** in the training loop. The pure forward/backward/step on a fixed batch takes
+  0.91 s. 16 or 20 workers (with 1 or more OpenCV threads) give the same 1.2 s, so data loading is not the
+  bottleneck; the remainder is host-side work in the official loop. 28 workers exceed the allocation's
+  50 GB of host RAM. **About 29 h per run** (87,220 iterations).
+- **Run script.** `tartanair_finetune/run_finetune.sh` was tested end to end: start from the official
+  weights, kill after a checkpoint, re-run, automatic resume from the newest checkpoint, clean finish,
+  and the "already complete" guard.
 
 ## 6. Checkpoint selection (validation only)
 
@@ -262,16 +310,17 @@ Scripts: `tartanair_finetune/check_trainval_data.py` (package content) and
 | 2026-10-14 | Add `clip_depth_range=(0.1, 200)` (missing from the official KITTI config; no effect on training) | user (accepted proposal) |
 | 2026-10-14 | Data-loading speed must not limit training: tune the worker count (engineering, not recipe) | user |
 | 2026-10-14 | Small tests run directly on the user's interactive node; final fine-tuning runs are started by the user by hand from scripts we provide, so progress is visible live | user |
+| 2026-10-14 | Batch 16 on one A100 without accumulation; 16 DataLoader workers; `--launcher None` | smoke test |
+| 2026-10-14 | Behaviour-neutral fixes to the official code/config listed in section 5a | user (accepted proposal) |
 
 ## 10. Plan
 
 1. **Done 2026-10-14.** Data: verified the zip checksums; wrote the `TartanAirV2Dataset` training class,
    which reads `frames.tsv` and the zips directly; checked dataloader samples visually and numerically
    (section 8).
-2. Configs: the training config for ViT-S runs (a) and (b); the inference config for (a).
-3. Smoke test (standby): pretrained weights load with only `mask_token` missing; training- and
-   inference-tree forward passes agree at step 0; a few hundred iterations with finite, decreasing losses;
-   memory and speed at batch 16.
+2. **Done 2026-10-14.** Configs: `training/mono/configs/RAFTDecoder/vit.raft5.small.tartanair.dn200.py`
+   (run b) and `.dn700.py` (run a); inference config `mono/configs/HourglassDecoder/vit.raft5.small.dn700.py`.
+3. **Done 2026-10-14.** Smoke tests (section 5b) and the run script `tartanair_finetune/run_finetune.sh`.
 4. Inference script: save before the zeroing; support validation frames and fine-tuned weights/configs.
    Then the zero-shot rerun and its bit-identity check.
 5. Run (a): 20 epochs; validation MAE for every epoch; select; test predictions.
