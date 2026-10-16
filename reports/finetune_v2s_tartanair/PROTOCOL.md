@@ -180,7 +180,7 @@ tests never wrote more than 3 checkpoints, so it never triggered. In both first 
 checkpoints were written (20 "Save model" log lines), but epochs 1-11 were then deleted; epochs 12-20
 remain. This conflicts with rules 3 and 4. The fix was verified with 12 checkpoints, all kept.
 
-**Decision (2026-10-15, user; to be confirmed with the collaborator): select among epochs 12-20 of the first
+**Decision (2026-10-15, user; the collaborator agreed): select among epochs 12-20 of the first
 runs (option B) instead of retraining (option A).** Rationale: the LR decays polynomially, and the
 validation environments are all training environments, so the best epoch is expected late. The
 pre-registered acceptance rule below was written before any validation result was seen:
@@ -249,6 +249,40 @@ Training went through the official `train.py`.
 - Outputs go to `<run-dir>/val_selection/`: `epXX.jsonl` (per frame), `summary.tsv` and
   `selection.json` (best epoch, checkpoint path and sha256, all per-epoch MAEs).
 
+### 6a. Selection results (2026-10-15; validation split only)
+
+Both runs were scored with `select_checkpoint.py --first-epoch 12 --reference` at commit `1b73983`. All
+1,944 validation frames were scored for every checkpoint, with no failures; `zeroing_px` was 0 throughout.
+Mean per-frame validation MAE (m):
+
+| epoch | run (a) dn700 | run (b) dn200 |
+|---|---|---|
+| 0 (official weights, reference) | 6.4340 | 6.1493 |
+| 12 | 1.4356 | 1.7107 |
+| 13 | 1.4160 | 1.6879 |
+| 14 | 1.4254 | 1.6920 |
+| 15 | 1.4156 | 1.6796 |
+| 16 | 1.3993 | 1.6752 |
+| 17 | 1.3951 | 1.6670 |
+| 18 | 1.3855 | 1.6613 |
+| 19 | 1.3815 | 1.6575 |
+| 20 | 1.3832 | 1.6601 |
+
+- **Selected: epoch 19 (step 82,859) in both runs.** That is not the lower boundary, so the
+  pre-registered rule accepts both selections. The collaborator agreed to the epoch-12-20 plan
+  (2026-10-15). In both runs epoch 12 has the highest MAE of the candidates, and the curve falls almost
+  monotonically to epoch 19 (epoch 20 is marginally higher). This supports the assumption that epochs
+  1-11 would not have been better.
+- Selected checkpoints (sha256):
+  - (a) `checkpoints/ft_v2s_ta2_dn700/ckpt/step00082859.pth`: `a44e8cfd1d10f4a4bbb715e4e68ad9498aafcacb97f37e4938afa182c5cc334f`
+  - (b) `checkpoints/ft_v2s_ta2_dn200/ckpt/step00082859.pth`: `49b89fa8a754f825cb7de105c3a742e9f0e3b5a42d15827ec32250267bff2d2d`
+- Reference rows: run (a)'s epoch 0 is the official weights under the dn700 inference config. Its value,
+  6.433979, equals the smoke-test value exactly, which confirms the evaluation is reproducible. Run (b)'s
+  epoch 0 is the official zero-shot model on the validation split.
+- If one run has to be named as "the" Metric3Dv2 baseline, validation MAE favours run (a) (1.3815 vs.
+  1.6575).
+- Files: `<run-dir>/val_selection/{summary.tsv,selection.json,epXX.jsonl}` and `<run-dir>/val_selection.log`.
+
 ## 7. Test-time output (delivery)
 
 Three prediction sets, each with one file per test frame (10,868), produced by the same inference script:
@@ -279,6 +313,22 @@ Commands (on a compute node; `--no-normals` because only depth is delivered):
         --out-dir $RCAC_SCRATCH/metric3d/outputs/finetune_v2s/ft_v2s_ta2_dn700/test
     python -B tartanair_eval/infer_tartanair.py --no-normals --weights <best ckpt> \
         --out-dir $RCAC_SCRATCH/metric3d/outputs/finetune_v2s/ft_v2s_ta2_dn200/test
+
+### Delivered prediction sets (2026-10-15)
+
+| Model | `<pred_dir>` (under `$RCAC_SCRATCH/metric3d/outputs/`) | Weights (sha256) | Inference config | Commit |
+|---|---|---|---|---|
+| zero-shot | `zeroshot_v2s/final/pred` | official `metric_depth_vit_small_800k.pth` (`b34b2a2b…`) | `vit.raft5.small.py` | `a289afc` |
+| fine-tuned (a) | `finetune_v2s/ft_v2s_ta2_dn700/test/pred` | run (a) epoch 19 (`a44e8cfd…`) | `vit.raft5.small.dn700.py` | `1b73983` |
+| fine-tuned (b) | `finetune_v2s/ft_v2s_ta2_dn200/test/pred` | run (b) epoch 19 (`49b89fa8…`) | `vit.raft5.small.py` | `1b73983` |
+
+Each set has 10,868 float32 640x640 files, and `zeroing_px` is 0 on every frame. Provenance: `<run>/test/logs/`
+(`provenance.txt` with the commit, no uncommitted changes, weights and config; `ckpt_sha256.txt`, computed
+when the predictions were made and equal to `selection.json`; `infer.log`; `timing.tsv`). Format check
+with the unmodified official `eval_depth.py`: `<set>/eval_official/` (2026-10-15: all three sets have
+10,868/10,868 frames scored, 0 failures, 0 unscorable and exit status 0; the zero-shot set's 7 subset files
+are identical to those of the stage-1 run).
+The test numbers played no part in any choice; all choices were final before the test predictions existed.
 
 ### Zero-shot: conformance of the existing run and the required rerun
 
@@ -372,7 +422,8 @@ Scripts: `tartanair_finetune/check_trainval_data.py` (package content) and
 | 2026-10-14 | Small tests run directly on the user's interactive node; final fine-tuning runs are started by the user by hand from scripts we provide, so progress is visible live | user |
 | 2026-10-14 | Batch 16 on one A100 without accumulation; 16 DataLoader workers; `--launcher None` | smoke test |
 | 2026-10-14 | Behaviour-neutral fixes to the official code/config listed in section 5a | user (accepted proposal) |
-| 2026-10-15 | Checkpoints of epochs 1-11 were lost in both runs (upstream retention); select among epochs 12-20 of the existing runs, with the pre-registered boundary rule (section 5a); retrain only if the rule triggers | user (collaborator to confirm) |
+| 2026-10-15 | Checkpoints of epochs 1-11 were lost in both runs (upstream retention); select among epochs 12-20 of the existing runs, with the pre-registered boundary rule (section 5a); retrain only if the rule triggers | user; collaborator agreed (2026-10-15) |
+| 2026-10-15 | Selected epoch 19 for both runs (section 6a); rule not triggered, no retraining | validation result |
 
 ## 10. Plan
 
@@ -385,7 +436,8 @@ Scripts: `tartanair_finetune/check_trainval_data.py` (package content) and
 4. **Done 2026-10-14.** Inference script (saves before the zeroing, validation split), checkpoint
    selection script (tested end to end on smoke checkpoints), and the zero-shot rerun with its bit-identity
    check.
-5. Run (a): 20 epochs; validation MAE for every epoch; select; test predictions.
-6. Run (b): the same.
+5. **Done 2026-10-15.** Run (a): 20 epochs; validation MAE for epochs 12-20 (epochs 1-11 lost, section 5a);
+   epoch 19 selected; test predictions.
+6. **Done 2026-10-15.** Run (b): the same; epoch 19.
 7. Write-up for the supplementary material: hyperparameter table, deviations from the official
    sources, commit hashes, checkpoint sha256s.
