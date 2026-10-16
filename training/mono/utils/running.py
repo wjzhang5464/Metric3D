@@ -361,8 +361,9 @@ def save_ckpt(cfg, model, optimizer, scheduler, curr_iter=0, curr_epoch=None, lo
     saved_ckpts = glob.glob(ckpt_dir + '/step*.pth')
     torch.save(ckpt, save_name)
 
-    # keep the last 8 ckpts
-    if len(saved_ckpts) > 8:
+    # keep the last 8 ckpts (upstream default); cfg.max_keep_ckpts overrides it, None keeps every checkpoint
+    max_keep_ckpts = cfg.get('max_keep_ckpts', 8)
+    if max_keep_ckpts is not None and len(saved_ckpts) > max_keep_ckpts:
         saved_ckpts.sort()
         os.remove(saved_ckpts.pop(0))
 

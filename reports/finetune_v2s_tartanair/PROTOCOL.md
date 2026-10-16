@@ -171,6 +171,14 @@ crash.
 | `do_train.train_by_iters_amp`: stop after the final iteration | Upstream loops forever. After `max_iters` the poly schedule computes `(1 - iter / max_iters) ** 0.9` of a negative number, the LR becomes complex, and training crashes. Everything up to and including the checkpoint at `max_iters` is unchanged. |
 | `training/.../ViT_DINO_reg.load_ckpt_dino`: a missing ImageNet DINOv2 file is skipped (ported from the inference tree) | The ImageNet weights are fully overwritten by `--load-from`. The resulting model has the same parameters as after a successful ImageNet load (`mask_token` removed), i.e. exactly the 361 keys of the released checkpoint. |
 | `TartanAirV2Dataset`: `cv2.setNumThreads(1)` in each worker | Thread count only. |
+| `running.save_ckpt` + config `max_keep_ckpts=None`: keep every checkpoint (added 2026-10-15) | Upstream silently deletes all but the newest 9 checkpoints. Retention only; nothing that is trained changes. See the incident note below. |
+
+**Incident (2026-10-15): epochs 1-11 of the first runs were deleted.** The upstream `save_ckpt` keeps only
+the newest 9 checkpoints (`# keep the last 8 ckpts`). I missed this when reviewing the loop, and the smoke
+tests never wrote more than 3 checkpoints, so it never triggered. In both first runs (run a: 2026-10-14
+15:40 to 10-15 15:28, commit `67570ce`; run b: 10-14 19:54 to 10-15 18:56, commit `3c81246`) all 20 epoch
+checkpoints were written (20 "Save model" log lines), but epochs 1-11 were then deleted; epochs 12-20
+remain. This conflicts with rules 3 and 4. The fix was verified with 12 checkpoints, all kept.
 
 ### 5b. Smoke tests (2026-10-14, on the user's interactive A100 node; validation frames only)
 

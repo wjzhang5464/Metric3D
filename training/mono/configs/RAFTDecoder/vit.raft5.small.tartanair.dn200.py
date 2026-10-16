@@ -63,6 +63,7 @@ evaluation = dict(
 
 # save checkpoint during training, with '*_AMP' is employing the automatic mix precision training
 checkpoint_config = dict(by_epoch=False, interval=interval)
+max_keep_ckpts = None  # keep all 20 epoch checkpoints (upstream save_ckpt otherwise deletes all but the newest 9)
 runner = dict(type='IterBasedRunner_AMP', max_iters=iters_per_epoch * epochs)
 
 # optimizer (official KITTI fine-tuning values)
