@@ -58,14 +58,15 @@ def check_keys(model, ckpt_path):
         raise SystemExit(f'{ckpt_path}: key mismatch, missing {sorted(mk - ck)[:5]}, unexpected {sorted(ck - mk)[:5]}')
 
 
-def score(weights, config, rows, ev, out_jsonl):
+def score(weights, config, rows, ev, out_jsonl, tag='', every=250):
     model, cfg = build_model(config, weights)
     check_keys(model, weights)
     tmp = out_jsonl + '.part'
     n_zeroing = 0
     t0 = time.time()
     with zipfile.ZipFile(osp.join(TRAINVAL_ROOT, 'validation.zip')) as zf, open(tmp, 'w') as f:
-        for r in rows:
+        maes = []
+        for i, r in enumerate(rows, 1):
             key = r['frame_key']
             rgb = read_rgb(zf, key)
             intr = [float(r['fx']), float(r['fy']), float(r['cx']), float(r['cy'])]
@@ -76,6 +77,12 @@ def score(weights, config, rows, ev, out_jsonl):
             status, res = ev.frame_metrics(pred, gt, valid)
             rec = {'frame_key': key, 'status': status, ('metrics' if status == 'scored' else 'reason'): res}
             f.write(json.dumps(rec) + '\n')
+            if status == 'scored':
+                maes.append(res['MAE'])
+            if every and (i % every == 0 or i == len(rows)):
+                el = time.time() - t0
+                print(f'  {tag}: {i}/{len(rows)} frames, running mean MAE {np.mean(maes):.4f} m, '
+                      f'{el:.0f} s elapsed, ~{el / i * (len(rows) - i):.0f} s left', flush=True)
     os.replace(tmp, out_jsonl)
     del model
     torch.cuda.empty_cache()
@@ -128,7 +135,8 @@ def main():
         if not osp.exists(ck):
             print(f'{tag}: {ck} not written yet, skipped', flush=True)
             continue
-        n_zero, secs = score(ck, a.config, rows, ev, jsonl)
+        print(f'{tag}: scoring {ck}', flush=True)
+        n_zero, secs = score(ck, a.config, rows, ev, jsonl, tag)
         agg = summarize(jsonl, ev)
         rows_out[tag] = {'tag': tag, 'epoch': epoch, 'step': epoch * a.iters_per_epoch, 'checkpoint': ck,
                          'frames': agg['frames'], 'failures': agg['failures'], 'unscorable': agg['unscorable'],
