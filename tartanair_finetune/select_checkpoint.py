@@ -100,7 +100,9 @@ def main():
     ap.add_argument('--run-dir', required=True, help='fine-tuning work dir (holds ckpt/)')
     ap.add_argument('--config', required=True, help='root-tree inference config matching the run (dn700 or official)')
     ap.add_argument('--out', default=None, help='default: <run-dir>/val_selection')
-    ap.add_argument('--epochs', type=int, default=20, help='candidates are epochs 1..N')
+    ap.add_argument('--epochs', type=int, default=20, help='candidates are epochs --first-epoch..N')
+    ap.add_argument('--first-epoch', type=int, default=1,
+                    help='first candidate epoch (12 for the first runs, whose epochs 1-11 were deleted; PROTOCOL.md)')
     ap.add_argument('--iters-per-epoch', type=int, default=ITERS_PER_EPOCH)
     ap.add_argument('--reference', action='store_true',
                     help='also score the official weights under this run\'s --config (= the run at step 0; reference only)')
@@ -115,7 +117,7 @@ def main():
     jobs = []
     if a.reference:
         jobs.append(('ep00_official', 0, DEFAULT_WEIGHTS))
-    for e in range(1, a.epochs + 1):
+    for e in range(a.first_epoch, a.epochs + 1):
         ck = osp.join(a.run_dir, 'ckpt', 'step%08d.pth' % (e * a.iters_per_epoch))
         jobs.append((f'ep{e:02d}', e, ck))
     unexpected = [p for p in sorted(os.listdir(osp.join(a.run_dir, 'ckpt'))) if re.match(r'step\d+\.pth$', p)
@@ -150,9 +152,10 @@ def main():
                 for r in sorted(rows_out.values(), key=lambda r: int(r['epoch'])):
                     f.write('\t'.join(str(r[c]) for c in cols) + '\n')
 
-    cands = [r for r in rows_out.values() if int(r['epoch']) >= 1]
-    if a.limit is not None or len(cands) < a.epochs:
-        print(f'{len(cands)}/{a.epochs} epochs scored; selection is written once all are scored', flush=True)
+    cands = [r for r in rows_out.values() if a.first_epoch <= int(r['epoch']) <= a.epochs]
+    n_cand = a.epochs - a.first_epoch + 1
+    if a.limit is not None or len(cands) < n_cand:
+        print(f'{len(cands)}/{n_cand} candidate epochs scored; selection is written once all are scored', flush=True)
         return
     if any(int(r['failures']) for r in cands):
         raise SystemExit('some validation frames failed scoring; see summary.tsv')
@@ -161,12 +164,21 @@ def main():
            'best_epoch': int(best['epoch']), 'best_step': int(best['step']), 'best_MAE': float(best['MAE']),
            'checkpoint': best['checkpoint'], 'checkpoint_sha256': sha256(best['checkpoint']),
            'inference_config': a.config,
+           'candidate_epochs': [a.first_epoch, a.epochs],
+           'best_at_lower_boundary': int(best['epoch']) == a.first_epoch and a.first_epoch > 1,
            'all_epochs_MAE': {int(r['epoch']): float(r['MAE']) for r in sorted(cands, key=lambda r: int(r['epoch']))}}
     if 'ep00_official' in rows_out:
         sel['reference_official_weights_MAE'] = float(rows_out['ep00_official']['MAE'])
+    if a.first_epoch > 1:
+        sel['note'] = (f'epochs 1-{a.first_epoch - 1} are not available (deleted by the upstream checkpoint '
+                       'retention; PROTOCOL.md incident 2026-10-15). Pre-registered rule: if the best epoch is the '
+                       'lower boundary, the selection is not accepted and the run is repeated with all epochs kept.')
     with open(osp.join(out, 'selection.json'), 'w') as f:
         json.dump(sel, f, indent=1)
     print(json.dumps(sel, indent=1), flush=True)
+    if sel.get('best_at_lower_boundary'):
+        print(f'WARNING: best epoch = first candidate epoch {a.first_epoch}; by the pre-registered rule this '
+              'selection is NOT accepted (an earlier epoch may be better).', flush=True)
 
 
 if __name__ == '__main__':

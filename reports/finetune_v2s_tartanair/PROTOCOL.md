@@ -180,6 +180,18 @@ tests never wrote more than 3 checkpoints, so it never triggered. In both first 
 checkpoints were written (20 "Save model" log lines), but epochs 1-11 were then deleted; epochs 12-20
 remain. This conflicts with rules 3 and 4. The fix was verified with 12 checkpoints, all kept.
 
+**Decision (2026-10-15, user; to be confirmed with the collaborator): select among epochs 12-20 of the first
+runs (option B) instead of retraining (option A).** Rationale: the LR decays polynomially, and the
+validation environments are all training environments, so the best epoch is expected late. The
+pre-registered acceptance rule below was written before any validation result was seen:
+- If a run's best validation-MAE epoch is **12** (the lower boundary of the available range), an earlier
+  epoch may be better. That selection is **not accepted**: the run is repeated with all checkpoints kept
+  (option A), and only the repeat is delivered.
+- If the best epoch is 13-20, the minimum lies inside the observed range, and the selection is accepted.
+  The supplementary material states the candidate range (12-20) and the reason.
+`select_checkpoint.py --first-epoch 12` applies this rule. It writes `candidate_epochs`,
+`best_at_lower_boundary` and a note to `selection.json`, and prints a warning on the boundary case.
+
 ### 5b. Smoke tests (2026-10-14, on the user's interactive A100 node; validation frames only)
 
 Results are in `$RCAC_SCRATCH/metric3d/outputs/smoke/`. Script: `tartanair_finetune/step0_equivalence.py`.
@@ -210,7 +222,7 @@ Training went through the official `train.py`.
 ## 6. Checkpoint selection (validation only)
 
 - Candidates: the 20 epoch checkpoints (epochs 1-20) of each run. The un-fine-tuned weights are not a
-  candidate.
+  candidate. **For the first runs only epochs 12-20 exist**; see the incident and decision in section 5a.
 - Each candidate is run on the 1,944 validation frames with **the same inference script and settings as
   the test predictions**: full 640x640 frame, GT intrinsics, no alignment, saved before the `< 300`
   zeroing.
@@ -360,6 +372,7 @@ Scripts: `tartanair_finetune/check_trainval_data.py` (package content) and
 | 2026-10-14 | Small tests run directly on the user's interactive node; final fine-tuning runs are started by the user by hand from scripts we provide, so progress is visible live | user |
 | 2026-10-14 | Batch 16 on one A100 without accumulation; 16 DataLoader workers; `--launcher None` | smoke test |
 | 2026-10-14 | Behaviour-neutral fixes to the official code/config listed in section 5a | user (accepted proposal) |
+| 2026-10-15 | Checkpoints of epochs 1-11 were lost in both runs (upstream retention); select among epochs 12-20 of the existing runs, with the pre-registered boundary rule (section 5a); retrain only if the rule triggers | user (collaborator to confirm) |
 
 ## 10. Plan
 
